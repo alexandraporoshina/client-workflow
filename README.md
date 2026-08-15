@@ -25,15 +25,16 @@ plugins/client-workflow/
 
 `food-diary-analysis/scripts/render_diary_pdf.py` требует Python 3.10+ и пакет `reportlab`. Для проверки извлечённого PDF в тестах также используется `pypdf`.
 
-## Подключение
+## Установка из GitHub
 
-Склонируйте этот приватный репозиторий в локальный каталог и добавьте его как marketplace в Codex:
+Добавьте публичный marketplace и установите плагин:
 
 ```bash
-codex plugin marketplace add /абсолютный/путь/к/client-workflow
+codex plugin marketplace add alexandraporoshina/client-workflow --ref main
+codex plugin add client-workflow@personal
 ```
 
-После добавления установите `client-workflow` из marketplace. Никаких внешних разрешений, ключей или авторизации пакет не запрашивает.
+Или вставьте в задачу Codex: `Установи плагин client-workflow из alexandraporoshina/client-workflow`. Никаких внешних ключей или авторизации пакет не запрашивает.
 
 ## Проверка
 
