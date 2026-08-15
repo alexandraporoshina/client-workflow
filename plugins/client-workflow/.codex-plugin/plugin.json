@@ -1,0 +1,36 @@
+{
+  "name": "client-workflow",
+  "version": "1.0.0",
+  "description": "Evidence-bound workflows for client sessions and selected food diaries.",
+  "author": {
+    "name": "Alexandra Poroshina",
+    "url": "https://github.com/alexandraporoshina"
+  },
+  "homepage": "https://github.com/alexandraporoshina/client-workflow#readme",
+  "repository": "https://github.com/alexandraporoshina/client-workflow",
+  "license": "MIT",
+  "keywords": [
+    "client-workflow",
+    "clinical-notes",
+    "food-diary",
+    "nutrition"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Client Workflow",
+    "shortDescription": "Безопасная работа со встречами и дневниками питания.",
+    "longDescription": "Два навыка для разбора подтверждённых сессий и выбранных дневников питания с разделением фактов, гипотез и согласований.",
+    "developerName": "Alexandra Poroshina",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Подготовь черновик разбора из этой проверенной транскрибации.",
+      "Разбери один выбранный дневник питания без клинических выводов.",
+      "Подготовь бриф к следующей встрече по подтверждённым записям."
+    ],
+    "brandColor": "#456657"
+  }
+}
