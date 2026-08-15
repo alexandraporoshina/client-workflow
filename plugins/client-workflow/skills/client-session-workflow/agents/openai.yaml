@@ -1,0 +1,4 @@
+interface:
+  display_name: "Работа со встречей клиента"
+  short_description: "Разбор, состояние и подготовка к сессии"
+  default_prompt: "Use $client-session-workflow to prepare a safe draft from this client session transcript."
