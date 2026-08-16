@@ -1,4 +1,4 @@
 interface:
   display_name: "Анализ пищевого дневника"
-  short_description: "Дневник, КБЖУ и нейтральный PDF"
-  default_prompt: "Use $food-diary-analysis to analyse this selected food diary safely."
+  short_description: "Дневник, фото и нейтральный PDF"
+  default_prompt: "Use $food-diary-analysis to analyse this selected food diary and its explicitly selected photos safely."

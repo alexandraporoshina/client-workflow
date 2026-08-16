@@ -12,6 +12,7 @@ import re
 import sys
 from typing import Any
 
+from PIL import Image as PilImage
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
@@ -19,20 +20,23 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import (
+    Image as PdfImage,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 
-TOP_LEVEL_KEYS = {"title", "period", "entries"}
-ENTRY_KEYS = {"time", "food", "client_note", "nutrition"}
-INSUFFICIENT_NUTRITION_KEYS = {"status"}
-ESTIMATED_NUTRITION_KEYS = {
-    "status",
-    "kcal",
-    "protein_g",
-    "fat_g",
-    "carbs_g",
-    "assumptions",
-}
+TOP_LEVEL_REQUIRED_KEYS = {"title", "period", "entries"}
+TOP_LEVEL_OPTIONAL_KEYS = {"photos"}
+TOP_LEVEL_KEYS = TOP_LEVEL_REQUIRED_KEYS | TOP_LEVEL_OPTIONAL_KEYS
+ENTRY_KEYS = {"time", "food", "client_note"}
+PHOTO_KEYS = {"path", "time"}
+UNKNOWN_PHOTO_TIME = "время не указано"
 FONT_CANDIDATES = (
     (
         Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
@@ -65,16 +69,50 @@ def _require_string(value: Any, location: str) -> str:
     return value
 
 
-def _require_number(value: Any, location: str) -> int | float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{location} must be a number")
-    return value
+def _validate_time(value: Any, location: str) -> str:
+    time_value = _require_string(value, location)
+    if re.fullmatch(r"\d{2}:\d{2}", time_value) is None:
+        raise ValueError(f"{location} must use HH:MM")
+    try:
+        datetime.strptime(time_value, "%H:%M")
+    except ValueError as error:
+        raise ValueError(f"{location} must use HH:MM") from error
+    return time_value
+
+
+def _validate_photo(photo: Any, index: int) -> None:
+    location = f"photo {index}"
+    if not isinstance(photo, dict):
+        raise ValueError(f"{location} must be an object")
+    _require_exact_keys(photo, PHOTO_KEYS, location)
+
+    photo_path = Path(_require_string(photo["path"], f"{location}.path"))
+    if not photo_path.is_file():
+        raise ValueError(f"{location}.path does not exist")
+
+    photo_time = _require_string(photo["time"], f"{location}.time")
+    if photo_time != UNKNOWN_PHOTO_TIME:
+        _validate_time(photo_time, f"{location}.time")
+
+    try:
+        with PilImage.open(photo_path) as image:
+            image.verify()
+        ImageReader(str(photo_path)).getSize()
+    except Exception as error:
+        raise ValueError(f"{location}.path is not a readable image") from error
 
 
 def _validate_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("top-level JSON value must be an object")
-    _require_exact_keys(payload, TOP_LEVEL_KEYS, "top-level")
+    unknown = set(payload) - TOP_LEVEL_KEYS
+    if unknown:
+        fields = ", ".join(sorted(unknown))
+        raise ValueError(f"unsupported top-level fields: {fields}")
+    missing = TOP_LEVEL_REQUIRED_KEYS - set(payload)
+    if missing:
+        fields = ", ".join(sorted(missing))
+        raise ValueError(f"missing top-level fields: {fields}")
 
     _require_string(payload["title"], "title")
     _require_string(payload["period"], "period")
@@ -88,39 +126,17 @@ def _validate_payload(payload: Any) -> dict[str, Any]:
             raise ValueError(f"{entry_location} must be an object")
         _require_exact_keys(entry, ENTRY_KEYS, "entry")
 
-        time_value = _require_string(entry["time"], f"{entry_location}.time")
-        if re.fullmatch(r"\d{2}:\d{2}", time_value) is None:
-            raise ValueError(f"{entry_location}.time must use HH:MM")
-        try:
-            datetime.strptime(time_value, "%H:%M")
-        except ValueError as error:
-            raise ValueError(f"{entry_location}.time must use HH:MM") from error
+        _validate_time(entry["time"], f"{entry_location}.time")
         _require_string(entry["food"], f"{entry_location}.food")
         _require_string(entry["client_note"], f"{entry_location}.client_note")
 
-        nutrition = entry["nutrition"]
-        if not isinstance(nutrition, dict):
-            raise ValueError(f"{entry_location}.nutrition must be an object")
-        status = nutrition.get("status")
-        if status == "insufficient_data":
-            _require_exact_keys(
-                nutrition, INSUFFICIENT_NUTRITION_KEYS, "nutrition"
-            )
-        elif status == "estimated":
-            _require_exact_keys(nutrition, ESTIMATED_NUTRITION_KEYS, "nutrition")
-            for key in ("kcal", "protein_g", "fat_g", "carbs_g"):
-                _require_number(nutrition[key], f"{entry_location}.nutrition.{key}")
-            _require_string(
-                nutrition["assumptions"],
-                f"{entry_location}.nutrition.assumptions",
-            )
-        else:
-            raise ValueError(
-                f"{entry_location}.nutrition.status must be "
-                "insufficient_data or estimated"
-            )
+    photos = payload.get("photos", [])
+    if not isinstance(photos, list):
+        raise ValueError("photos must be a list")
+    for index, photo in enumerate(photos):
+        _validate_photo(photo, index)
 
-    return payload
+    return {**payload, "photos": photos}
 
 
 def _register_fonts() -> tuple[str, str]:
@@ -130,22 +146,6 @@ def _register_fonts() -> tuple[str, str]:
             pdfmetrics.registerFont(TTFont("DiaryBold", str(bold_path)))
             return "DiaryRegular", "DiaryBold"
     raise RuntimeError("no Unicode-capable font found")
-
-
-def _format_number(value: int | float) -> str:
-    return f"{value:g}"
-
-
-def _nutrition_text(nutrition: dict[str, Any]) -> str:
-    if nutrition["status"] == "insufficient_data":
-        return "КБЖУ не рассчитаны"
-    return (
-        f"КБЖУ: {_format_number(nutrition['kcal'])} ккал; "
-        f"Б {_format_number(nutrition['protein_g'])} г; "
-        f"Ж {_format_number(nutrition['fat_g'])} г; "
-        f"У {_format_number(nutrition['carbs_g'])} г"
-        f"<br/>Допущения: {escape(nutrition['assumptions'])}"
-    )
 
 
 def _render(payload: dict[str, Any], output_path: Path) -> None:
@@ -196,13 +196,29 @@ def _render(payload: dict[str, Any], output_path: Path) -> None:
         fontName=bold_font,
         textColor=colors.HexColor("#26352F"),
     )
+    photo_heading_style = ParagraphStyle(
+        "DiaryPhotoHeading",
+        parent=styles["Heading2"],
+        fontName=bold_font,
+        fontSize=12,
+        leading=16,
+        textColor=colors.HexColor("#26352F"),
+        spaceBefore=5 * mm,
+        spaceAfter=3 * mm,
+    )
+    photo_caption_style = ParagraphStyle(
+        "DiaryPhotoCaption",
+        parent=cell_style,
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#56635E"),
+    )
 
     rows = [
         [
             Paragraph("Время", header_style),
             Paragraph("Еда", header_style),
             Paragraph("Заметка клиента", header_style),
-            Paragraph("КБЖУ", header_style),
         ]
     ]
     ordered_entries = sorted(payload["entries"], key=lambda entry: entry["time"])
@@ -212,13 +228,12 @@ def _render(payload: dict[str, Any], output_path: Path) -> None:
                 Paragraph(escape(entry["time"]), cell_style),
                 Paragraph(escape(entry["food"]), cell_style),
                 Paragraph(escape(entry["client_note"]), cell_style),
-                Paragraph(_nutrition_text(entry["nutrition"]), cell_style),
             ]
         )
 
     table = Table(
         rows,
-        colWidths=[24 * mm, 50 * mm, 48 * mm, 56 * mm],
+        colWidths=[24 * mm, 64 * mm, 90 * mm],
         repeatRows=1,
         hAlign="LEFT",
     )
@@ -242,7 +257,53 @@ def _render(payload: dict[str, Any], output_path: Path) -> None:
         Spacer(1, 1 * mm),
         table,
     ]
+    if payload["photos"]:
+        story.extend(
+            [
+                Paragraph("Фото дня", photo_heading_style),
+                _photo_gallery(payload["photos"], photo_caption_style),
+            ]
+        )
     document.build(story)
+
+
+def _photo_gallery(
+    photos: list[dict[str, Any]], caption_style: ParagraphStyle
+) -> Table:
+    cells: list[list[Any]] = []
+    for photo in photos:
+        photo_path = Path(photo["path"])
+        width, height = ImageReader(str(photo_path)).getSize()
+        scale = min((80 * mm) / width, (64 * mm) / height)
+        image = PdfImage(str(photo_path), width=width * scale, height=height * scale)
+        image.hAlign = "CENTER"
+        if photo["time"] == UNKNOWN_PHOTO_TIME:
+            caption = "Время: не указано"
+        else:
+            caption = f"Время: {escape(photo['time'])}"
+        cells.append([image, Spacer(1, 2 * mm), Paragraph(caption, caption_style)])
+
+    rows: list[list[Any]] = []
+    for index in range(0, len(cells), 2):
+        row = cells[index : index + 2]
+        if len(row) == 1:
+            row.append("")
+        rows.append(row)
+
+    gallery = Table(rows, colWidths=[85 * mm, 85 * mm], hAlign="LEFT")
+    gallery.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5 * mm),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4 * mm),
+            ]
+        )
+    )
+    return gallery
 
 
 def main() -> int:
